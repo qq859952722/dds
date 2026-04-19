@@ -1,0 +1,185 @@
+name: 检查更新并发布Release
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # 每天UTC 02:00执行（北京时间10:00）
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: '强制发布（即使没有版本更新）'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 下载最新版本记录
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          path: .
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 设置环境
+        run: |
+          echo "WORKSPACE=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
+          echo "RELEASE_DIR=${GITHUB_WORKSPACE}/release_assets" >> $GITHUB_ENV
+          echo "CHANGELOG_FILE=${GITHUB_WORKSPACE}/changelog.md" >> $GITHUB_ENV
+          mkdir -p "${GITHUB_WORKSPACE}/release_assets"
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl jq tar
+
+      - name: 运行下载脚本
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          chmod +x ./download_binaries.sh
+          ./download_binaries.sh
+
+      - name: 检查版本变化
+        id: version_check
+        run: |
+          VERSION_RECORD="${GITHUB_WORKSPACE}/downloads/version_record.txt"
+          CHANGELOG="${GITHUB_WORKSPACE}/changelog.md"
+          HAS_UPDATE=false
+          
+          echo "# 二进制文件版本更新" > "${CHANGELOG}"
+          echo "" >> "${CHANGELOG}"
+          echo "更新时间: $(date '+%Y-%m-%d %H:%M:%S UTC')" >> "${CHANGELOG}"
+          echo "" >> "${CHANGELOG}"
+          echo "## 版本变更详情" >> "${CHANGELOG}"
+          echo "" >> "${CHANGELOG}"
+          
+          if [ ! -f "${VERSION_RECORD}" ]; then
+            echo "未找到版本记录文件"
+            echo "has_update=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # 读取版本记录
+          while IFS=: read -r project_name version; do
+            if [ -z "${project_name}" ] || [ -z "${version}" ]; then
+              continue
+            fi
+            
+            echo "检查项目: ${project_name} - ${version}"
+            
+            # 获取上次发布的版本（从git tag）
+            last_release_tag=$(git tag -l "${project_name}-*" --sort=-v:refname | head -1)
+            last_version=""
+            if [ -n "${last_release_tag}" ]; then
+              last_version=${last_release_tag#${project_name}-}
+            fi
+            
+            if [ -z "${last_version}" ]; then
+              echo "  首次发布: ${version}"
+              HAS_UPDATE=true
+              echo "### ${project_name}" >> "${CHANGELOG}"
+              echo "- **状态**: 首次发布" >> "${CHANGELOG}"
+              echo "- **新版本**: ${version}" >> "${CHANGELOG}"
+              echo "" >> "${CHANGELOG}"
+            elif [ "${last_version}" != "${version}" ]; then
+              echo "  版本更新: ${last_version} -> ${version}"
+              HAS_UPDATE=true
+              echo "### ${project_name}" >> "${CHANGELOG}"
+              echo "- **状态**: 版本更新" >> "${CHANGELOG}"
+              echo "- **旧版本**: ${last_version}" >> "${CHANGELOG}"
+              echo "- **新版本**: ${version}" >> "${CHANGELOG}"
+              echo "" >> "${CHANGELOG}"
+            else
+              echo "  版本未变化: ${version}"
+              echo "### ${project_name}" >> "${CHANGELOG}"
+              echo "- **状态**: 无更新" >> "${CHANGELOG}"
+              echo "- **当前版本**: ${version}" >> "${CHANGELOG}"
+              echo "" >> "${CHANGELOG}"
+            fi
+          done < "${VERSION_RECORD}"
+          
+          # 检查是否强制发布
+          if [ "${{ github.event.inputs.force_release }}" == "true" ]; then
+            echo "强制发布模式"
+            HAS_UPDATE=true
+          fi
+          
+          echo "has_update=${HAS_UPDATE}" >> $GITHUB_OUTPUT
+          
+          echo "=== 变更日志 ==="
+          cat "${CHANGELOG}"
+
+      - name: 打包二进制文件
+        if: steps.version_check.outputs.has_update == 'true'
+        run: |
+          DOWNLOAD_DIR="${GITHUB_WORKSPACE}/downloads"
+          RELEASE_DIR="${GITHUB_WORKSPACE}/release_assets"
+          
+          # 打包amd64架构
+          if [ -d "${DOWNLOAD_DIR}/amd64" ] && [ "$(ls -A ${DOWNLOAD_DIR}/amd64 2>/dev/null)" ]; then
+            echo "打包amd64架构..."
+            tar -czf "${RELEASE_DIR}/linux-binaries-x86_64.tar.gz" \
+              -C "${DOWNLOAD_DIR}" amd64/
+            echo "amd64打包完成: $(du -h ${RELEASE_DIR}/linux-binaries-x86_64.tar.gz | cut -f1)"
+          fi
+          
+          # 打包arm64架构
+          if [ -d "${DOWNLOAD_DIR}/arm64" ] && [ "$(ls -A ${DOWNLOAD_DIR}/arm64 2>/dev/null)" ]; then
+            echo "打包arm64架构..."
+            tar -czf "${RELEASE_DIR}/linux-binaries-arm64.tar.gz" \
+              -C "${DOWNLOAD_DIR}" arm64/
+            echo "arm64打包完成: $(du -h ${RELEASE_DIR}/linux-binaries-arm64.tar.gz | cut -f1)"
+          fi
+          
+          # 复制版本记录
+          if [ -f "${DOWNLOAD_DIR}/version_record.txt" ]; then
+            cp "${DOWNLOAD_DIR}/version_record.txt" "${RELEASE_DIR}/version_record.txt"
+          fi
+          
+          echo "=== 打包文件列表 ==="
+          ls -lh "${RELEASE_DIR}/"
+
+      - name: 生成Release标签名
+        if: steps.version_check.outputs.has_update == 'true'
+        id: tag_name
+        run: |
+          TAG_NAME="binaries-$(date '+%Y%m%d-%H%M%S')"
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "release_name=二进制文件集合 $(date '+%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: 创建Release
+        if: steps.version_check.outputs.has_update == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag_name.outputs.tag_name }}
+          name: ${{ steps.tag_name.outputs.release_name }}
+          body_path: ${{ env.CHANGELOG_FILE }}
+          files: |
+            ${{ env.RELEASE_DIR }}/linux-binaries-x86_64.tar.gz
+            ${{ env.RELEASE_DIR }}/linux-binaries-arm64.tar.gz
+            ${{ env.RELEASE_DIR }}/version_record.txt
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 输出结果
+        run: |
+          if [ "${{ steps.version_check.outputs.has_update }}" == "true" ]; then
+            echo "✅ 已创建新的Release"
+            echo "标签: ${{ steps.tag_name.outputs.tag_name }}"
+          else
+            echo "ℹ️ 所有项目均为最新版本，无需发布"
+          fi
