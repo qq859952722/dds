@@ -54,6 +54,7 @@ jobs:
         id: version_check
         run: |
           VERSION_RECORD="${GITHUB_WORKSPACE}/downloads/version_record.txt"
+          LAST_VERSION_RECORD="${GITHUB_WORKSPACE}/last_version_record.txt"
           CHANGELOG="${GITHUB_WORKSPACE}/changelog.md"
           HAS_UPDATE=false
           
@@ -70,44 +71,38 @@ jobs:
             exit 0
           fi
           
-          # 读取版本记录
-          while IFS=: read -r project_name version; do
-            if [ -z "${project_name}" ] || [ -z "${version}" ]; then
-              continue
-            fi
-            
-            echo "检查项目: ${project_name} - ${version}"
-            
-            # 获取上次发布的版本（从git tag）
-            last_release_tag=$(git tag -l "${project_name}-*" --sort=-v:refname | head -1)
-            last_version=""
-            if [ -n "${last_release_tag}" ]; then
-              last_version=${last_release_tag#${project_name}-}
-            fi
-            
-            if [ -z "${last_version}" ]; then
-              echo "  首次发布: ${version}"
+          # 下载上次release的version_record.txt
+          LAST_RELEASE_API="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest"
+          LAST_VERSION_URL=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" "${LAST_RELEASE_API}" | jq -r '.assets[] | select(.name == "version_record.txt") | .browser_download_url' 2>/dev/null || echo "")
+          
+          if [ -n "${LAST_VERSION_URL}" ]; then
+            echo "下载上次release的版本记录..."
+            curl -s -L -H "Authorization: token ${GITHUB_TOKEN}" -o "${LAST_VERSION_RECORD}" "${LAST_VERSION_URL}"
+          fi
+          
+          if [ -f "${LAST_VERSION_RECORD}" ]; then
+            # 比较版本记录文件
+            if ! diff -q "${VERSION_RECORD}" "${LAST_VERSION_RECORD}" >/dev/null 2>&1; then
+              echo "版本记录有变化，准备发布新release"
               HAS_UPDATE=true
-              echo "### ${project_name}" >> "${CHANGELOG}"
-              echo "- **状态**: 首次发布" >> "${CHANGELOG}"
-              echo "- **新版本**: ${version}" >> "${CHANGELOG}"
-              echo "" >> "${CHANGELOG}"
-            elif [ "${last_version}" != "${version}" ]; then
-              echo "  版本更新: ${last_version} -> ${version}"
-              HAS_UPDATE=true
-              echo "### ${project_name}" >> "${CHANGELOG}"
+              
+              # 生成变更日志
+              echo "### 版本变更" >> "${CHANGELOG}"
               echo "- **状态**: 版本更新" >> "${CHANGELOG}"
-              echo "- **旧版本**: ${last_version}" >> "${CHANGELOG}"
-              echo "- **新版本**: ${version}" >> "${CHANGELOG}"
+              echo "- **详情**: 二进制文件版本有变化" >> "${CHANGELOG}"
               echo "" >> "${CHANGELOG}"
             else
-              echo "  版本未变化: ${version}"
-              echo "### ${project_name}" >> "${CHANGELOG}"
-              echo "- **状态**: 无更新" >> "${CHANGELOG}"
-              echo "- **当前版本**: ${version}" >> "${CHANGELOG}"
-              echo "" >> "${CHANGELOG}"
+              echo "版本记录无变化，无需发布"
             fi
-          done < "${VERSION_RECORD}"
+          else
+            echo "首次发布或未找到上次版本记录"
+            HAS_UPDATE=true
+            
+            echo "### 版本变更" >> "${CHANGELOG}"
+            echo "- **状态**: 首次发布" >> "${CHANGELOG}"
+            echo "- **详情**: 初始版本发布" >> "${CHANGELOG}"
+            echo "" >> "${CHANGELOG}"
+          fi
           
           # 检查是否强制发布
           if [ "${{ github.event.inputs.force_release }}" == "true" ]; then
