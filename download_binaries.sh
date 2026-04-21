@@ -215,6 +215,39 @@ update_version_record() {
     log_info "更新版本记录: ${project_name}:${version}"
 }
 
+# 获取所有项目的最新版本并生成完整版本记录
+generate_complete_version_record() {
+    > "${VERSION_RECORD}.new"
+    for project_config in "${PROJECTS[@]}"; do
+        IFS='|' read -r project_name owner repo asset_pattern_amd64 asset_pattern_arm64 binary_name <<< "${project_config}"
+        local latest_version
+        latest_version=$(get_latest_version "${owner}" "${repo}")
+        if [ -n "${latest_version}" ]; then
+            echo "${project_name}:${latest_version}" >> "${VERSION_RECORD}.new"
+        fi
+    done
+}
+
+# 比较版本记录是否有变化
+version_records_diff() {
+    if [ ! -f "${VERSION_RECORD}" ]; then
+        return 0
+    fi
+    
+    if [ ! -f "${VERSION_RECORD}.new" ]; then
+        return 1
+    fi
+    
+    local sorted_old=$(sort "${VERSION_RECORD}")
+    local sorted_new=$(sort "${VERSION_RECORD}.new")
+    
+    if [ "${sorted_old}" != "${sorted_new}" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # 检查是否需要更新版本
 needs_update() {
     local project_name="$1"
