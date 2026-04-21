@@ -64,19 +64,70 @@ jobs:
           echo "更新时间: $(date '+%Y-%m-%d %H:%M:%S UTC')" >> "${CHANGELOG}"
           echo "" >> "${CHANGELOG}"
           
+          # 检查当前版本记录是否存在
+          echo "检查当前版本记录文件..."
           if [ ! -f "${VERSION_RECORD}" ]; then
-            echo "未找到版本记录文件"
+            echo "未找到版本记录文件: ${VERSION_RECORD}"
+            ls -la "${GITHUB_WORKSPACE}/downloads/" 2>/dev/null || echo "downloads目录不存在"
             echo "has_update=false" >> $GITHUB_OUTPUT
             exit 0
+          else
+            echo "当前版本记录文件存在，内容:"
+            cat "${VERSION_RECORD}"
           fi
           
           # 下载上次release的version_record.txt
+          echo "正在获取上次release的版本记录..."
           LAST_RELEASE_API="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest"
-          LAST_VERSION_URL=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" "${LAST_RELEASE_API}" | jq -r '.assets[] | select(.name == "version_record.txt") | .browser_download_url' 2>/dev/null || echo "")
+          echo "API URL: ${LAST_RELEASE_API}"
           
-          if [ -n "${LAST_VERSION_URL}" ]; then
+          # 获取最新release信息
+          LAST_RELEASE_INFO=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" "${LAST_RELEASE_API}")
+          LAST_RELEASE_TAG=$(echo "${LAST_RELEASE_INFO}" | jq -r '.tag_name // "none"')
+          echo "Latest Release Tag: ${LAST_RELEASE_TAG}"
+          
+          # 列出所有可用资产
+          echo "Release Assets:"
+          echo "${LAST_RELEASE_INFO}" | jq -r '.assets[]?.name // empty' 2>/dev/null | while read -r asset; do
+            echo "  - ${asset}"
+          done
+          
+          # 提取version_record.txt的下载URL
+          LAST_VERSION_URL=$(echo "${LAST_RELEASE_INFO}" | jq -r '.assets[]? | select(.name == "version_record.txt") | .browser_download_url' 2>/dev/null | head -1)
+          echo "Version Record URL: ${LAST_VERSION_URL:-'NOT FOUND'}"
+          
+          if [ -n "${LAST_VERSION_URL}" ] && [ "${LAST_VERSION_URL}" != "null" ]; then
             echo "下载上次release的版本记录..."
-            curl -s -L -H "Authorization: token ${GITHUB_TOKEN}" -o "${LAST_VERSION_RECORD}" "${LAST_VERSION_URL}"
+            # 对于公共仓库的browser_download_url，不需要Authorization头
+            HTTP_CODE=$(curl -s -L -w "%{http_code}" -o "${LAST_VERSION_RECORD}" "${LAST_VERSION_URL}")
+            echo "Download HTTP Code: ${HTTP_CODE}"
+            
+            if [ -f "${LAST_VERSION_RECORD}" ] && [ -s "${LAST_VERSION_RECORD}" ]; then
+              echo "下载成功，文件内容:"
+              cat "${LAST_VERSION_RECORD}"
+            else
+              echo "警告: version_record.txt 下载失败或文件为空"
+              rm -f "${LAST_VERSION_RECORD}"
+              
+              # 尝试备用方法：使用API直接下载
+              echo "尝试使用API备用方法下载..."
+              RELEASE_ASSET_ID=$(echo "${LAST_RELEASE_INFO}" | jq -r '.assets[]? | select(.name == "version_record.txt") | .id' 2>/dev/null | head -1)
+              if [ -n "${RELEASE_ASSET_ID}" ] && [ "${RELEASE_ASSET_ID}" != "null" ]; then
+                ASSET_API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${RELEASE_ASSET_ID}"
+                curl -s -L -H "Authorization: token ${GITHUB_TOKEN}" -H "Accept: application/octet-stream" -o "${LAST_VERSION_RECORD}" "${ASSET_API_URL}"
+                
+                if [ -f "${LAST_VERSION_RECORD}" ] && [ -s "${LAST_VERSION_RECORD}" ]; then
+                  echo "备用方法下载成功，文件内容:"
+                  cat "${LAST_VERSION_RECORD}"
+                else
+                  echo "备用方法也失败了"
+                  rm -f "${LAST_VERSION_RECORD}"
+                fi
+              fi
+            fi
+          else
+            echo "未找到上次release中的version_record.txt资产"
+            echo "请检查GitHub Releases页面确认该文件是否存在"
           fi
           
           # 初始化详细变更日志
@@ -87,6 +138,14 @@ jobs:
             # 排序后比较版本记录，确保顺序不影响比较结果
             SORTED_CURRENT=$(sort "${VERSION_RECORD}")
             SORTED_LAST=$(sort "${LAST_VERSION_RECORD}")
+            
+            echo "=== 版本记录比较 ==="
+            echo "当前版本记录:"
+            echo "${SORTED_CURRENT}"
+            echo "---"
+            echo "上次版本记录:"
+            echo "${SORTED_LAST}"
+            echo "==================="
             
             if [ "${SORTED_CURRENT}" != "${SORTED_LAST}" ]; then
               echo "版本记录有变化，准备发布新release"
@@ -211,6 +270,12 @@ jobs:
           # 复制版本记录
           if [ -f "${DOWNLOAD_DIR}/version_record.txt" ]; then
             cp "${DOWNLOAD_DIR}/version_record.txt" "${RELEASE_DIR}/version_record.txt"
+            echo "已复制version_record.txt"
+            cat "${RELEASE_DIR}/version_record.txt"
+          else
+            echo "警告: 未找到version_record.txt文件"
+            # 创建版本记录文件
+            ls -la "${DOWNLOAD_DIR}/"
           fi
           
           echo "=== 打包文件列表 ==="
