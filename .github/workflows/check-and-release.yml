@@ -2,131 +2,159 @@ name: Check and Release
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   check-and-release:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Get current versions from version_record.txt
-        id: current_versions
+      - name: Install dependencies
         run: |
-          if [ -f "downloads/version_record.txt" ]; then
-            cat downloads/version_record.txt
-            CURRENT_VERSIONS=$(cat downloads/version_record.txt)
-          else
-            echo "No version_record.txt found, will record first run versions"
-            CURRENT_VERSIONS=""
-          fi
-          echo "current<<ENDOFVERSIONS" >> $GITHUB_OUTPUT
-          echo "${CURRENT_VERSIONS}" >> $GITHUB_OUTPUT
-          echo "ENDOFVERSIONS" >> $GITHUB_OUTPUT
+          sudo apt-get update
+          sudo apt-get install -y curl jq tar sed unzip
 
-      - name: Setup environment
+      - name: Get latest release and extract version record
+        id: get-latest-release
+        run: |
+          mkdir -p downloads
+          
+          LATEST_RELEASE=$(curl -s -L "https://api.github.com/repos/${{ github.repository }}/releases/latest" || echo "")
+          
+          if [ -n "${LATEST_RELEASE}" ]; then
+            TAG_NAME=$(echo "${LATEST_RELEASE}" | jq -r '.tag_name // empty')
+            echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+            
+            BODY=$(echo "${LATEST_RELEASE}" | jq -r '.body // empty')
+            if [ -n "${BODY}" ]; then
+              echo "Extracting version info from previous release body..."
+              echo "${BODY}" | grep -E "^- \*\*.*\*\*: .*$" | sed -E 's/^- \*\*(.*)\*\*: (.*)$/\1:\2/' > downloads/version_record.txt
+            fi
+          fi
+
+      - name: Run download_binaries.sh
+        id: download-binaries
         run: |
           chmod +x download_binaries.sh
-          mkdir -p downloads
+          ./download_binaries.sh
 
-      - name: Download latest binaries
+      - name: Generate complete new version record
+        id: generate-version-record
         run: |
-          bash download_binaries.sh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compare versions
-        id: compare
-        run: |
-          HAS_UPDATE=false
-          UPDATE_NOTES=""
+          cd downloads
+          > version_record.new
           
-          if [ ! -f "downloads/version_record.txt" ]; then
-            echo "::error::version_record.txt not created"
-            exit 1
-          fi
+          PROJECTS=(
+            "transmission|qq859952722|transmission-builder"
+            "qbittorrent|userdocs|qbittorrent-nox-static"
+            "smartdns|pymumu|smartdns"
+            "adguardhome|AdguardTeam|AdGuardHome"
+            "dnscrypt-proxy|DNSCrypt|dnscrypt-proxy"
+            "aria2|SuperNG6|Aria2-Pro-Core"
+          )
           
-          OLD_VERSIONS="${{ steps.current_versions.outputs.current }}"
-          
-          while IFS=: read -r project new_version; do
-            [ -z "${project}" ] && continue
-            
-            old_version=$(echo "${OLD_VERSIONS}" | grep "^${project}:" | cut -d: -f2- || echo "")
-            
-            if [ -z "${old_version}" ]; then
-              UPDATE_NOTES+="- **${project}**: ${new_version} (首次发布)\n"
-              HAS_UPDATE=true
-            elif [ "${old_version}" != "${new_version}" ]; then
-              UPDATE_NOTES+="- **${project}**: ${old_version} → ${new_version}\n"
-              HAS_UPDATE=true
+          for project_config in "${PROJECTS[@]}"; do
+            IFS='|' read -r project_name owner repo <<< "${project_config}"
+            LATEST_VERSION=$(curl -s "https://api.github.com/repos/${owner}/${repo}/releases/latest" | jq -r '.tag_name // empty' || echo "")
+            if [ -n "${LATEST_VERSION}" ]; then
+              echo "${project_name}:${LATEST_VERSION}" >> version_record.new
             fi
-          done < downloads/version_record.txt
-          
-          echo "has_update=${HAS_UPDATE}" >> $GITHUB_OUTPUT
-          echo "update_notes<<ENDOFNOTES" >> $GITHUB_OUTPUT
-          echo -e "${UPDATE_NOTES}" >> $GITHUB_OUTPUT
-          echo "ENDOFNOTES" >> $GITHUB_OUTPUT
-
-      - name: Configure Git
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
-
-      - name: Commit version record
-        if: steps.compare.outputs.has_update == 'true'
-        run: |
-          git add downloads/version_record.txt
-          git diff --cached --quiet || git commit -m "chore: update version record [skip ci]"
-          git push origin HEAD:${GITHUB_REF_NAME}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Generate next tag
-        if: steps.compare.outputs.has_update == 'true'
-        id: tag
-        run: |
-          BASE_TAG="v$(date +%Y.%m.%d)"
-          COUNTER=1
-          NEW_TAG="${BASE_TAG}"
-          
-          while gh release view "${NEW_TAG}" &>/dev/null; do
-            NEW_TAG="${BASE_TAG}.${COUNTER}"
-            COUNTER=$((COUNTER + 1))
           done
           
-          echo "tag_name=${NEW_TAG}" >> $GITHUB_OUTPUT
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "New version record:"
+          cat version_record.new
 
-      - name: Delete existing release if exists
-        if: steps.compare.outputs.has_update == 'true'
+      - name: Check if versions have changed
+        id: check-update
         run: |
-          TAG_NAME="${{ steps.tag.outputs.tag_name }}"
-          if gh release view "${TAG_NAME}" &>/dev/null; then
-            echo "Release ${TAG_NAME} already exists, deleting..."
-            gh release delete "${TAG_NAME}" --yes
+          cd downloads
+          
+          HAS_UPDATE=false
+          
+          if [ ! -f version_record.txt ]; then
+            echo "No previous version record found - will create first release"
+            HAS_UPDATE=true
+          else
+            echo "Previous version record:"
+            cat version_record.txt
+            echo ""
+            echo "New version record:"
+            cat version_record.new
+            echo ""
+            
+            if ! diff -q <(sort version_record.txt) <(sort version_record.new) >/dev/null; then
+              echo "Versions have changed!"
+              HAS_UPDATE=true
+            else
+              echo "No version changes detected"
+            fi
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+          echo "has_update=${HAS_UPDATE}" >> $GITHUB_OUTPUT
 
-      - name: Create release
-        if: steps.compare.outputs.has_update == 'true'
+      - name: Prepare release notes
+        if: steps.check-update.outputs.has_update == 'true'
+        id: prepare-release-notes
         run: |
-          FULL_NOTES="## Binary Updates\n\n${{ steps.compare.outputs.update_notes }}\n---\nGenerated: $(date '+%Y-%m-%d %H:%M:%S UTC')"
-          gh release create "${{ steps.tag.outputs.tag_name }}" \
-            --title "Release ${{ steps.tag.outputs.tag_name }}" \
-            --notes "${FULL_NOTES}" \
-            downloads/amd64/* downloads/arm64/*
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          cd downloads
+          
+          RELEASE_NOTES="# Software Versions\n\n"
+          
+          if [ -f version_record.new ]; then
+            while IFS= read -r line; do
+              if [ -n "$line" ]; then
+                PROJECT=$(echo "$line" | cut -d':' -f1)
+                VERSION=$(echo "$line" | cut -d':' -f2-)
+                RELEASE_NOTES+="- **${PROJECT}**: ${VERSION}\n"
+              fi
+            done < version_record.new
+          fi
+          
+          echo -e "${RELEASE_NOTES}" > release_notes.txt
+          echo -e "Release Notes:\n${RELEASE_NOTES}"
 
-      - name: No updates
-        if: steps.compare.outputs.has_update != 'true'
-        run: echo "All binaries are up to date"
+      - name: Create final version_record.txt
+        if: steps.check-update.outputs.has_update == 'true'
+        run: |
+          cd downloads
+          if [ -f version_record.new ]; then
+            cp version_record.new version_record.txt
+          fi
+
+      - name: Package binaries
+        if: steps.check-update.outputs.has_update == 'true'
+        run: |
+          DATE=$(date +%Y%m%d)
+          ZIP_NAME="dds-${DATE}.zip"
+          
+          if [ -d downloads ]; then
+            cd downloads
+            zip -r "../${ZIP_NAME}" .
+          fi
+
+      - name: Get current date
+        if: steps.check-update.outputs.has_update == 'true'
+        id: get-date
+        run: |
+          DATE=$(date +%Y%m%d)
+          echo "date=${DATE}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        if: steps.check-update.outputs.has_update == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get-date.outputs.date }}
+          name: Release ${{ steps.get-date.outputs.date }}
+          body_path: downloads/release_notes.txt
+          files: dds-${{ steps.get-date.outputs.date }}.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
