@@ -56,13 +56,12 @@ jobs:
           VERSION_RECORD="${GITHUB_WORKSPACE}/downloads/version_record.txt"
           LAST_VERSION_RECORD="${GITHUB_WORKSPACE}/last_version_record.txt"
           CHANGELOG="${GITHUB_WORKSPACE}/changelog.md"
+          DETAILED_CHANGELOG="${GITHUB_WORKSPACE}/detailed_changelog.md"
           HAS_UPDATE=false
           
           echo "# 二进制文件版本更新" > "${CHANGELOG}"
           echo "" >> "${CHANGELOG}"
           echo "更新时间: $(date '+%Y-%m-%d %H:%M:%S UTC')" >> "${CHANGELOG}"
-          echo "" >> "${CHANGELOG}"
-          echo "## 版本变更详情" >> "${CHANGELOG}"
           echo "" >> "${CHANGELOG}"
           
           if [ ! -f "${VERSION_RECORD}" ]; then
@@ -80,17 +79,37 @@ jobs:
             curl -s -L -H "Authorization: token ${GITHUB_TOKEN}" -o "${LAST_VERSION_RECORD}" "${LAST_VERSION_URL}"
           fi
           
+          # 初始化详细变更日志
+          echo "## 版本变更详情" > "${DETAILED_CHANGELOG}"
+          echo "" >> "${DETAILED_CHANGELOG}"
+          
           if [ -f "${LAST_VERSION_RECORD}" ]; then
-            # 比较版本记录文件
-            if ! diff -q "${VERSION_RECORD}" "${LAST_VERSION_RECORD}" >/dev/null 2>&1; then
+            # 排序后比较版本记录，确保顺序不影响比较结果
+            SORTED_CURRENT=$(sort "${VERSION_RECORD}")
+            SORTED_LAST=$(sort "${LAST_VERSION_RECORD}")
+            
+            if [ "${SORTED_CURRENT}" != "${SORTED_LAST}" ]; then
               echo "版本记录有变化，准备发布新release"
               HAS_UPDATE=true
               
-              # 生成变更日志
-              echo "### 版本变更" >> "${CHANGELOG}"
-              echo "- **状态**: 版本更新" >> "${CHANGELOG}"
-              echo "- **详情**: 二进制文件版本有变化" >> "${CHANGELOG}"
-              echo "" >> "${CHANGELOG}"
+              # 生成详细的变更日志
+              echo "### 版本变更" >> "${DETAILED_CHANGELOG}"
+              echo "" >> "${DETAILED_CHANGELOG}"
+              
+              # 比较具体变更的项目
+              while IFS=: read -r project_name current_version; do
+                last_version=$(grep "^${project_name}:" "${LAST_VERSION_RECORD}" | cut -d: -f2-)
+                
+                if [ "${current_version}" != "${last_version}" ]; then
+                  if [ -z "${last_version}" ]; then
+                    echo "- **${project_name}**: 新增项目，版本 ${current_version}" >> "${DETAILED_CHANGELOG}"
+                  else
+                    echo "- **${project_name}**: ${last_version} → ${current_version}" >> "${DETAILED_CHANGELOG}"
+                  fi
+                fi
+              done < <(sort "${VERSION_RECORD}")
+              
+              echo "" >> "${DETAILED_CHANGELOG}"
             else
               echo "版本记录无变化，无需发布"
             fi
@@ -98,10 +117,11 @@ jobs:
             echo "首次发布或未找到上次版本记录"
             HAS_UPDATE=true
             
-            echo "### 版本变更" >> "${CHANGELOG}"
-            echo "- **状态**: 首次发布" >> "${CHANGELOG}"
-            echo "- **详情**: 初始版本发布" >> "${CHANGELOG}"
-            echo "" >> "${CHANGELOG}"
+            echo "### 版本变更" >> "${DETAILED_CHANGELOG}"
+            echo "" >> "${DETAILED_CHANGELOG}"
+            echo "- **状态**: 首次发布" >> "${DETAILED_CHANGELOG}"
+            echo "- **详情**: 初始版本发布" >> "${DETAILED_CHANGELOG}"
+            echo "" >> "${DETAILED_CHANGELOG}"
           fi
           
           # 检查是否强制发布
@@ -114,6 +134,57 @@ jobs:
           
           echo "=== 变更日志 ==="
           cat "${CHANGELOG}"
+          cat "${DETAILED_CHANGELOG}"
+
+      - name: 获取源项目Release信息
+        if: steps.version_check.outputs.has_update == 'true'
+        id: fetch_source_releases
+        run: |
+          VERSION_RECORD="${GITHUB_WORKSPACE}/downloads/version_record.txt"
+          LAST_VERSION_RECORD="${GITHUB_WORKSPACE}/last_version_record.txt"
+          DETAILED_CHANGELOG="${GITHUB_WORKSPACE}/detailed_changelog.md"
+          
+          echo "## 源项目Release信息" >> "${DETAILED_CHANGELOG}"
+          echo "" >> "${DETAILED_CHANGELOG}"
+          
+          # 从download_binaries.sh中提取项目配置
+          while IFS='|' read -r project_name owner repo asset_amd64 asset_arm64 binary_name; do
+            # 跳过注释和空行
+            [[ "${project_name}" =~ ^#.*$ ]] && continue
+            [[ -z "${project_name}" ]] && continue
+            
+            # 获取当前版本
+            current_version=$(grep "^${project_name}:" "${VERSION_RECORD}" 2>/dev/null | cut -d: -f2-)
+            
+            if [ -n "${current_version}" ]; then
+              # 获取源项目的release body
+              RELEASE_API="https://api.github.com/repos/${owner}/${repo}/releases/tags/${current_version}"
+              RELEASE_BODY=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" "${RELEASE_API}" | jq -r '.body // empty' 2>/dev/null || echo "")
+              
+              if [ -n "${RELEASE_BODY}" ]; then
+                echo "### ${project_name}" >> "${DETAILED_CHANGELOG}"
+                echo "- **仓库**: ${owner}/${repo}" >> "${DETAILED_CHANGELOG}"
+                echo "- **版本**: ${current_version}" >> "${DETAILED_CHANGELOG}"
+                echo "" >> "${DETAILED_CHANGELOG}"
+                
+                # 添加release body（截断到500字符以避免过长）
+                TRUNCATED_BODY=$(echo "${RELEASE_BODY}" | head -c 500)
+                if [ ${#RELEASE_BODY} -gt 500 ]; then
+                  TRUNCATED_BODY="${TRUNCATED_BODY}..."
+                fi
+                
+                echo "#### Release Notes" >> "${DETAILED_CHANGELOG}"
+                echo "" >> "${DETAILED_CHANGELOG}"
+                echo "${TRUNCATED_BODY}" >> "${DETAILED_CHANGELOG}"
+                echo "" >> "${DETAILED_CHANGELOG}"
+                echo "---" >> "${DETAILED_CHANGELOG}"
+                echo "" >> "${DETAILED_CHANGELOG}"
+              fi
+            fi
+          done < <(grep -v "^#" download_binaries.sh | grep -E "^[a-zA-Z]" | sed 's/^[[:space:]]*//' | sed 's/"$//')
+          
+          echo "=== 完整的Release描述 ==="
+          cat "${DETAILED_CHANGELOG}"
 
       - name: 打包二进制文件
         if: steps.version_check.outputs.has_update == 'true'
@@ -159,7 +230,7 @@ jobs:
         with:
           tag_name: ${{ steps.tag_name.outputs.tag_name }}
           name: ${{ steps.tag_name.outputs.release_name }}
-          body_path: ${{ env.CHANGELOG_FILE }}
+          body_path: ${{ env.WORKSPACE }}/detailed_changelog.md
           files: |
             ${{ env.RELEASE_DIR }}/linux-binaries-x86_64.tar.gz
             ${{ env.RELEASE_DIR }}/linux-binaries-arm64.tar.gz
