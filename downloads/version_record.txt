@@ -1,6 +1,1 @@
-transmission:transmission-static-4.1.1
-qbittorrent:release-5.1.4_v2.0.12
-smartdns:Release47.1
-adguardhome:v0.107.74
-dnscrypt-proxy:2.1.15
-aria2:ci-20260324-075427-UTC
+
