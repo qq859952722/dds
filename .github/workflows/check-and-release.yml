@@ -105,6 +105,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Delete existing release if exists
+        if: steps.compare.outputs.has_update == 'true'
+        run: |
+          TAG_NAME="${{ steps.tag.outputs.tag_name }}"
+          if gh release view "${TAG_NAME}" &>/dev/null; then
+            echo "Release ${TAG_NAME} already exists, deleting..."
+            gh release delete "${TAG_NAME}" --yes
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create release
         if: steps.compare.outputs.has_update == 'true'
         run: |
