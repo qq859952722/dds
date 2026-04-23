@@ -1,0 +1,14 @@
+#!/bin/sh
+. /bin/log_functions.sh
+
+# DNSCrypt-Proxy服务启动脚本
+# 使用s6-setuidgid以非root用户启动
+# 监听127.0.0.1:5553，作为SmartDNS的上游DNS
+# 使用s6-notifyoncheck检测服务就绪状态
+log_info "dnscrypt-proxy" "正在启动 DNSCrypt-Proxy 服务 (监听127.0.0.1:5553)..."
+
+# 就绪检测：通过TCP连接检测5553端口是否已监听
+exec 2>&1
+exec s6-notifyoncheck -d -w 5000 -n 10 \
+    -c "nc -w 1 127.0.0.1 5553 < /dev/null > /dev/null 2>&1" \
+    -- s6-setuidgid ddsuser dnscrypt-proxy -config /config/dnscrypt-proxy/dnscrypt-proxy.toml

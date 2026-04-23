@@ -1,0 +1,16 @@
+#!/bin/sh
+. /bin/log_functions.sh
+
+# dcron定时任务服务启动脚本
+# 以root用户运行，原因如下：
+# 1. 定时更新脚本(update_smartdns_list.sh)需要通过s6-svc指令重启SmartDNS服务
+# 2. s6-svc需要写入s6服务监督FIFO，该FIFO仅root用户有写权限
+# 3. 若以非root用户运行，定时任务中的s6-svc指令将无法执行
+# 注意：dcron为系统级服务，其定时任务需要特权操作，与用户面向服务不同
+log_info "dcron" "正在启动 dcron 定时任务服务..."
+
+# 就绪检测：通过crontab命令验证crond可响应
+exec 2>&1
+exec s6-notifyoncheck -d -w 5000 -n 10 \
+    -c "crontab -l > /dev/null 2>&1" \
+    -- crond -f -l 6 -L /dev/stdout

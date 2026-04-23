@@ -1,0 +1,3 @@
+# 转发规则
+# 格式：域名 上游DNS服务器
+# 例如：example.com https://dns.google/dns-query

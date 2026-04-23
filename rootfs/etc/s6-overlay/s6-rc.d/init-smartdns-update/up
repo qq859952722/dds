@@ -1,0 +1,9 @@
+#!/bin/sh
+. /bin/log_functions.sh
+
+if [ "${ENABLE_DNS_LIST_UPDATE}" = "true" ]; then
+    log_info "init-smartdns-update" "执行首次 SmartDNS 规则列表更新..."
+    /bin/update_smartdns_list.sh
+else
+    log_info "init-smartdns-update" "SmartDNS 规则列表首次更新已禁用 (ENABLE_DNS_LIST_UPDATE=false)"
+fi

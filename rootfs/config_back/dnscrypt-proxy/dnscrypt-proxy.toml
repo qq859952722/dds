@@ -1,0 +1,48 @@
+# 监听地址（供SmartDNS作为上游使用）
+listen_addresses = ['127.0.0.1:5553', '[::1]:5553']
+# 最大并发DNS请求
+max_clients = 250
+# DNS缓存大小
+cache_size = 4096
+# 缓存最小TTL
+cache_min_ttl = 600
+# 缓存最大TTL
+cache_max_ttl = 86400
+# 否定缓存TTL
+reject_ttl = 600
+
+# 服务器列表
+server_names = ['cloudflare', 'google', 'alidns-doh', 'dnspod-doh']
+
+# 可靠服务器源列表
+sources = [
+  { name = 'public-resolvers', url = 'https://download.dnscrypt.info/resolvers-list/v3/public-resolvers.md', minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3', refresh_delay = 72, prefix = '' },
+  { name = 'relays', url = 'https://download.dnscrypt.info/resolvers-list/v3/relays.md', minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3', refresh_delay = 72, prefix = '' }
+]
+
+# 回退服务器
+fallback_resolvers = ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query']
+
+# 域名劫持规则
+cloaking_rules = '/config/dnscrypt-proxy/cloaking-rules.txt'
+# 转发规则
+forwarding_rules = '/config/dnscrypt-proxy/forwarding-rules.txt'
+# 黑名单
+blocked_names_file = '/config/dnscrypt-proxy/blacklist-domains.txt'
+
+# 忽略系统DNS
+ignore_system_dns = true
+# 强制使用DNS-over-HTTPS
+require_dnssec = false
+require_nolog = true
+require_nofilter = true
+# DNS-over-HTTPS优先
+force_tcp = false
+# 超时设置
+timeout = 2500
+keepalive = 30
+# 日志级别
+log_level = 2
+# 使用DNSCrypt临时密钥
+dnscrypt_ephemeral_keys = true
+tls_disable_session_tickets = false

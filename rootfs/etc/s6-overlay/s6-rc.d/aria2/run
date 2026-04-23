@@ -1,0 +1,15 @@
+#!/bin/sh
+. /bin/log_functions.sh
+
+# Aria2服务启动脚本
+# 使用s6-setuidgid以非root用户启动
+# 使用s6-notifyoncheck检测RPC接口就绪状态
+ARIA2_RPC_PORT="${ARIA2_RPC_PORT:-6800}"
+
+log_info "aria2" "正在启动 Aria2 服务 (RPC端口:${ARIA2_RPC_PORT})..."
+
+# 就绪检测：通过HTTP请求检测JSON-RPC接口是否可访问
+exec 2>&1
+exec s6-notifyoncheck -d -w 5000 -n 10 \
+    -c "curl -sf http://localhost:${ARIA2_RPC_PORT}/jsonrpc > /dev/null 2>&1" \
+    -- s6-setuidgid ddsuser aria2c --conf-path=/config/aria2/aria2.conf

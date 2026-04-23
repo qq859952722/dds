@@ -1,0 +1,2 @@
+#!/bin/sh
+/bin/s6-finish-handler.sh aria2 "$1"
