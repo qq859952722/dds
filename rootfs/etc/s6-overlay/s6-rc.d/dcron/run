@@ -13,4 +13,4 @@ log_info "dcron" "正在启动 dcron 定时任务服务..."
 exec 2>&1
 exec s6-notifyoncheck -d -w 5000 -n 10 \
     -c "crontab -l > /dev/null 2>&1" \
-    -- crond -f -l 6 -L /dev/stdout
+    -- /usr/sbin/crond -f -l 6 -L /dev/stdout

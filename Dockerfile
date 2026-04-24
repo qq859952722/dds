@@ -5,9 +5,12 @@ FROM alpine:3.22
 # 复制 rootfs 目录下所有内容到镜像根目录
 COPY rootfs/ /
 
+# 允许来自构建参数的 DDS 版本传递
+ARG DDS_VERSION
+
 # 执行构建初始化脚本（只在镜像构建阶段运行一次）
 # 负责：安装依赖、获取二进制文件、初始化配置目录等
-RUN chmod +x /bin/init.sh && /bin/init.sh
+RUN chmod +x /bin/init.sh && DDS_VERSION=${DDS_VERSION} /bin/init.sh
 
 # 核心环境变量配置（可在启动时覆盖）
 ENV PUID=1000 \

@@ -21,9 +21,11 @@ apk add --no-cache \
     curl \
     jq \
     ca-certificates \
-    tzdata-minimal \
+    tzdata \
     tar \
-    gzip
+    unzip \
+    gzip \
+    busybox-extras
 
 log_info "init" "核心依赖安装完成"
 
@@ -37,7 +39,20 @@ echo "Asia/Shanghai" > /etc/timezone
 log_info "init" "时区配置完成"
 
 # ============================================================
-# 第3步：获取并部署核心二进制文件
+# 第3步：创建默认非root 用户
+# ============================================================
+log_info "init" "创建默认用户 ddsuser..."
+if ! getent group ddsuser > /dev/null 2>&1; then
+    addgroup -g 1000 ddsuser
+    log_info "init" "已创建用户组 ddsuser (GID=1000)"
+fi
+if ! id -u ddsuser > /dev/null 2>&1; then
+    adduser -D -u 1000 -G ddsuser -s /bin/sh ddsuser
+    log_info "init" "已创建用户 ddsuser (UID=1000)"
+fi
+
+# ============================================================
+# 第4步：获取并部署核心二进制文件
 # ============================================================
 log_info "init" "从 qq859952722/dds 获取核心二进制文件..."
 
@@ -52,32 +67,55 @@ esac
 
 log_info "init" "当前构建架构: ${ARCH} (${ASSET_ARCH})"
 
-RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/${DDS_REPO}/releases/latest")
-if [ -z "${RELEASE_JSON}" ]; then
-    log_error "init" "无法获取 ${DDS_REPO} 的Release信息"
-    exit 1
+if [ -z "${DDS_VERSION}" ]; then
+    RELEASE_JSON=$(curl -fsSL --retry 3 --retry-delay 5 -A "dds-init-script" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${DDS_REPO}/releases/latest")
+    if [ -z "${RELEASE_JSON}" ]; then
+        log_error "init" "无法获取 ${DDS_REPO} 的Release信息"
+        exit 1
+    fi
+    DDS_VERSION=$(echo "${RELEASE_JSON}" | jq -r '.tag_name')
+    log_info "init" "最新Release版本: ${DDS_VERSION}"
+else
+    log_info "init" "使用外部传入的 DDS_VERSION: ${DDS_VERSION}"
 fi
 
-DDS_VERSION=$(echo "${RELEASE_JSON}" | jq -r '.tag_name')
-log_info "init" "最新Release版本: ${DDS_VERSION}"
 echo "${DDS_VERSION}" > /dds-version
 
-DOWNLOAD_URL=$(echo "${RELEASE_JSON}" | jq -r ".assets[] | select(.name | contains(\"${ASSET_ARCH}\")) | .browser_download_url" | head -1)
-if [ -z "${DOWNLOAD_URL}" ]; then
-    log_error "init" "未找到架构 ${ASSET_ARCH} 对应的Release资产"
-    exit 1
-fi
-
+DOWNLOAD_URL="https://github.com/${DDS_REPO}/releases/download/${DDS_VERSION}/dds-${DDS_VERSION}.zip"
 log_info "init" "下载地址: ${DOWNLOAD_URL}"
 mkdir -p /tmp/dds_binaries
-curl -fsSL "${DOWNLOAD_URL}" -o /tmp/dds_binaries.tar.gz
-
-tar -xzf /tmp/dds_binaries.tar.gz -C /tmp/dds_binaries/
-
-if [ -d /tmp/dds_binaries/bin ]; then
-    cp /tmp/dds_binaries/bin/* /bin/ 2>/dev/null || true
+if curl -fsSL --retry 3 --retry-delay 5 -I "${DOWNLOAD_URL}" >/dev/null 2>&1; then
+    ASSET_TYPE=zip
 else
-    cp /tmp/dds_binaries/* /bin/ 2>/dev/null || true
+    DOWNLOAD_URL=$(echo "${RELEASE_JSON}" | jq -r '.assets[] | select(.name | test("\\.zip$|\\.tar\\.gz$")) | .browser_download_url' | head -1)
+    if [ -z "${DOWNLOAD_URL}" ]; then
+        log_error "init" "未找到备用 Release 资产"
+        exit 1
+    fi
+    log_info "init" "备用下载地址: ${DOWNLOAD_URL}"
+    if echo "${DOWNLOAD_URL}" | grep -qE '\.zip$'; then
+        ASSET_TYPE=zip
+    else
+        ASSET_TYPE=tgz
+    fi
+fi
+
+if [ "${ASSET_TYPE}" = "zip" ]; then
+    curl -fsSL --retry 3 --retry-delay 5 -A "dds-init-script" -H "Accept: application/octet-stream" "${DOWNLOAD_URL}" -o /tmp/dds_binaries.zip
+    unzip -q /tmp/dds_binaries.zip -d /tmp/dds_binaries
+    if [ -d "/tmp/dds_binaries/${ASSET_ARCH}" ]; then
+        cp /tmp/dds_binaries/${ASSET_ARCH}/* /bin/ 2>/dev/null || true
+    else
+        cp /tmp/dds_binaries/* /bin/ 2>/dev/null || true
+    fi
+else
+    curl -fsSL --retry 3 --retry-delay 5 -A "dds-init-script" "${DOWNLOAD_URL}" -o /tmp/dds_binaries.tar.gz
+    tar -xzf /tmp/dds_binaries.tar.gz -C /tmp/dds_binaries/
+    if [ -d /tmp/dds_binaries/bin ]; then
+        cp /tmp/dds_binaries/bin/* /bin/ 2>/dev/null || true
+    else
+        cp /tmp/dds_binaries/* /bin/ 2>/dev/null || true
+    fi
 fi
 
 find /bin -maxdepth 1 -type f -executable -exec chmod 755 {} \;
