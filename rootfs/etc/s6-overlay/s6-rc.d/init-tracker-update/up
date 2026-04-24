@@ -1,9 +1,0 @@
-#!/bin/sh
-. /bin/log_functions.sh
-
-if [ "${ENABLE_TRACKER_UPDATE}" = "true" ]; then
-    log_info "init-tracker-update" "执行首次 Tracker 列表更新..."
-    /bin/update_tracker.sh
-else
-    log_info "init-tracker-update" "Tracker 列表首次更新已禁用 (ENABLE_TRACKER_UPDATE=false)"
-fi

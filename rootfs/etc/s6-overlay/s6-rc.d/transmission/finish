@@ -1,2 +1,0 @@
-#!/bin/sh
-/bin/s6-finish-handler.sh transmission "$1"
