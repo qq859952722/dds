@@ -42,6 +42,7 @@ jobs:
 
       - name: Run download_binaries.sh
         id: download-binaries
+        shell: bash
         run: |
           chmod +x download_binaries.sh
           ./download_binaries.sh
@@ -96,8 +97,11 @@ jobs:
             cat version_record.new
             echo ""
             
-            if ! diff -q <(sort version_record.txt) <(sort version_record.new) >/dev/null; then
+            sort version_record.txt | uniq > version_record.sorted.txt
+            sort version_record.new | uniq > version_record.new.sorted.txt
+            if ! diff -u version_record.sorted.txt version_record.new.sorted.txt >/dev/null; then
               echo "Versions have changed!"
+              diff -u version_record.sorted.txt version_record.new.sorted.txt || true
               HAS_UPDATE=true
             else
               echo "No version changes detected"
