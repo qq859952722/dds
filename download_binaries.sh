@@ -14,6 +14,8 @@
 # 目标项目配置
 # 格式: 项目名|仓库所有者|仓库名|AMD64资产匹配模式|ARM64资产匹配模式|二进制文件名
 # 注意: 资产匹配模式使用兼容grep的正则表达式来匹配Release资产名称
+#       对于同时发布 musl 和 glibc 版本的软件，请指定更精确的 musl 包名称
+#       对于 openlist，同名 lite 包和全功能包都存在，需确保匹配到全功能包
 # 已验证实际Release资产格式（2026-04-19）
 declare -a PROJECTS=(
     "transmission|qq859952722|transmission-builder|transmission-daemon.*amd64|transmission-daemon.*arm64|transmission-daemon"
@@ -22,6 +24,8 @@ declare -a PROJECTS=(
     "adguardhome|AdguardTeam|AdGuardHome|AdGuardHome_linux_amd64|AdGuardHome_linux_arm64|AdGuardHome"
     "dnscrypt-proxy|DNSCrypt|dnscrypt-proxy|dnscrypt-proxy-linux_x86_64|dnscrypt-proxy-linux_arm64|dnscrypt-proxy"
     "aria2|SuperNG6|Aria2-Pro-Core|aria2-static-linux-x86_64|aria2-static-linux-arm64|aria2c"
+    "lucky|gdy666|lucky|lucky_.*_Linux_x86_64\.tar\.gz|lucky_.*_Linux_arm64\.tar\.gz|lucky"
+    "openlist|OpenListTeam|OpenList|openlist-linux-musl-amd64\.tar\.gz|openlist-linux-musl-arm64\.tar\.gz|openlist"
 )
 
 # 支持的CPU架构
@@ -154,7 +158,7 @@ get_latest_version() {
     local token="${GITHUB_TOKEN:-}"
     
     local api_url="${GITHUB_API_BASE}/repos/${owner}/${repo}/releases/latest"
-    local curl_cmd=("curl" "-s" "-L" "--connect-timeout" "10" "--max-time" "30")
+    local curl_cmd=("curl" "-sSL" "-H" "User-Agent: dds-binary-downloader" "--connect-timeout" "10" "--max-time" "30")
     
     if [ -n "${token}" ]; then
         curl_cmd+=("-H" "Authorization: token ${token}")
@@ -283,10 +287,12 @@ download_with_retry() {
     while [ ${attempt} -le $((MAX_RETRIES + 1)) ]; do
         log_info "下载中 (第 ${attempt}/$((MAX_RETRIES + 1)) 次尝试): ${url}"
         
-        if curl -s -L \
+        if curl -sSL \
             --connect-timeout "${DOWNLOAD_TIMEOUT}" \
             --max-time 300 \
-            --retry 0 \
+            --retry 2 \
+            --retry-delay 2 \
+            --fail \
             -o "${output_file}" \
             "${url}" 2>/dev/null; then
             
@@ -380,7 +386,7 @@ process_project_arch() {
     
     local token="${GITHUB_TOKEN:-}"
     local api_url="${GITHUB_API_BASE}/repos/${owner}/${repo}/releases/latest"
-    local curl_cmd=("curl" "-s" "-L" "--connect-timeout" "10" "--max-time" "30")
+    local curl_cmd=("curl" "-sSL" "-H" "User-Agent: dds-binary-downloader" "--connect-timeout" "10" "--max-time" "30")
     
     if [ -n "${token}" ]; then
         curl_cmd+=("-H" "Authorization: token ${token}")
@@ -530,5 +536,7 @@ main() {
     log_info "版本记录文件: ${VERSION_RECORD}"
 }
 
-# 执行主函数
-main "$@"
+# 如果脚本被直接执行，则执行主函数
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi

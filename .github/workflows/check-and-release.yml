@@ -19,14 +19,15 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl jq tar sed unzip
+          sudo apt-get install -y curl jq tar sed unzip zip
 
       - name: Get latest release and extract version record
         id: get-latest-release
+        shell: bash
         run: |
           mkdir -p downloads
           
-          LATEST_RELEASE=$(curl -s -L "https://api.github.com/repos/${{ github.repository }}/releases/latest" || echo "")
+          LATEST_RELEASE=$(curl -sSL -H "User-Agent: dds-github-action" "https://api.github.com/repos/${{ github.repository }}/releases/latest" || echo "")
           
           if [ -n "${LATEST_RELEASE}" ]; then
             TAG_NAME=$(echo "${LATEST_RELEASE}" | jq -r '.tag_name // empty')
@@ -47,6 +48,7 @@ jobs:
 
       - name: Generate complete new version record
         id: generate-version-record
+        shell: bash
         run: |
           cd downloads
           > version_record.new
@@ -58,13 +60,17 @@ jobs:
             "adguardhome|AdguardTeam|AdGuardHome"
             "dnscrypt-proxy|DNSCrypt|dnscrypt-proxy"
             "aria2|SuperNG6|Aria2-Pro-Core"
+            "lucky|gdy666|lucky"
+            "openlist|OpenListTeam|OpenList"
           )
           
           for project_config in "${PROJECTS[@]}"; do
             IFS='|' read -r project_name owner repo <<< "${project_config}"
-            LATEST_VERSION=$(curl -s "https://api.github.com/repos/${owner}/${repo}/releases/latest" | jq -r '.tag_name // empty' || echo "")
+            LATEST_VERSION=$(curl -sSL -H "User-Agent: dds-github-action" "https://api.github.com/repos/${owner}/${repo}/releases/latest" | jq -r '.tag_name // empty' || echo "")
             if [ -n "${LATEST_VERSION}" ]; then
               echo "${project_name}:${LATEST_VERSION}" >> version_record.new
+            else
+              echo "警告: 无法获取 ${owner}/${repo} 的最新版本，跳过" >&2
             fi
           done
           
@@ -73,6 +79,7 @@ jobs:
 
       - name: Check if versions have changed
         id: check-update
+        shell: bash
         run: |
           cd downloads
           
