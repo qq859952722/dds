@@ -40,13 +40,6 @@ jobs:
             fi
           fi
 
-      - name: Run download_binaries.sh
-        id: download-binaries
-        shell: bash
-        run: |
-          chmod +x download_binaries.sh
-          ./download_binaries.sh
-
       - name: Generate complete new version record
         id: generate-version-record
         shell: bash
@@ -110,9 +103,18 @@ jobs:
           
           echo "has_update=${HAS_UPDATE}" >> $GITHUB_OUTPUT
 
+      - name: Run download_binaries.sh
+        if: steps.check-update.outputs.has_update == 'true'
+        id: download-binaries
+        shell: bash
+        run: |
+          chmod +x download_binaries.sh
+          ./download_binaries.sh
+
       - name: Prepare release notes
         if: steps.check-update.outputs.has_update == 'true'
         id: prepare-release-notes
+        shell: bash
         run: |
           cd downloads
           
